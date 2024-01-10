@@ -10,7 +10,7 @@ import onnxruntime
 
 class GFPGANFaceAugment:
     def __init__(self, model_path, use_gpu = False):
-        self.ort_session = onnxruntime.InferenceSession(model_path)
+        self.ort_session = onnxruntime.InferenceSession(model_path, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.net_input_name = self.ort_session.get_inputs()[0].name
         _,self.net_input_channels,self.net_input_height,self.net_input_width = self.ort_session.get_inputs()[0].shape
         self.net_output_count = len(self.ort_session.get_outputs())
@@ -65,29 +65,39 @@ class GFPGANFaceAugment:
             output = cv2.resize(output, (width, height))
         return output, inv_soft_mask
 
-    def forward(self, img):
-        height, width = img.shape[0], img.shape[1]
-        img = self.pre_process(img)
+    def forward(self, img_1, img_2):
+        height, width = img_1.shape[0], img_1.shape[1]
+        height_2, width_2 = img_2.shape[0], img_2.shape[1]
+        img_1 = self.pre_process(img_1)
+        img_2 = self.pre_process(img_2)
+        img = np.concatenate([img_1, img_2], axis=0)
         t = timeit.default_timer()
         ort_inputs = {self.ort_session.get_inputs()[0].name: img}
         ort_outs = self.ort_session.run(None, ort_inputs)
         output = ort_outs[0][0]
+        output_2 = ort_outs[0][1]
         output, inv_soft_mask = self.post_process(output, height, width)
+        output_2, _ = self.post_process(output_2, height_2, width_2)
         print('infer time:',timeit.default_timer()-t)  
         output = output.astype(np.uint8)
-        return output, inv_soft_mask
+        output_2 = output_2.astype(np.uint8)
+        return output, output_2, inv_soft_mask
         
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("onnxruntime demo")
     parser.add_argument('--model_path', type=str, default=None, help='model path')
     parser.add_argument('--image_path', type=str, default=None, help='input image path')
+    parser.add_argument('--image_path_2', type=str, default=None, help='input image path')
     parser.add_argument('--save_path', type=str, default="output.jpg", help='output image path')
     args = parser.parse_args()
 
     faceaugment = GFPGANFaceAugment(model_path=args.model_path)
     image = cv2.imread(args.image_path, 1)
-    output, _ = faceaugment.forward(image)
+    image_2 = cv2.imread(args.image_path_2, 1)
+    output, output_2,  _ = faceaugment.forward(image, image_2)
     cv2.imwrite(args.save_path, output)
+    cv2.imwrite("test.jpg", output_2)
+
 
 # python demo_onnx.py --model_path GFPGANv1.4.onnx --image_path ./cropped_faces/Adele_crop.png
 

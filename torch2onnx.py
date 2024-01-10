@@ -31,7 +31,7 @@ img_size = args.img_size
 
 model = GFPGAN()#.cuda()
 
-x = torch.rand(1, 3, 512, 512)#.cuda()
+x = torch.rand(2, 3, 512, 512)#.cuda()
 
 state_dict = torch.load(model_path)['params_ema']
 new_state_dict = OrderedDict()
@@ -49,6 +49,8 @@ for k, v in state_dict.items():
 model.load_state_dict(new_state_dict, strict=False)
 model.eval()
 
+batch_size = 2
+##scripted_module = torch.jit.script(model)
 torch.onnx.export(model, x, onnx_model_path,
                     export_params=True, opset_version=11, do_constant_folding=True,
                     input_names = ['input'],output_names = [])

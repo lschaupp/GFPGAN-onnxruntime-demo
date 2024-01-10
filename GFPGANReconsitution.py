@@ -32,7 +32,7 @@ class ResBlock(nn.Module):
         if mode == 'down':
             self.scale_factor = 0.5
         elif mode == 'up':
-            self.scale_factor = 2
+            self.scale_factor = 2.0
 
     def forward(self, x):
         out = F.leaky_relu_(self.conv1(x), negative_slope=0.2)
@@ -315,20 +315,20 @@ class GFPGAN(nn.Module):
         #noise = [None] * 15  # for each style conv layer
         latent = styles[0]    
         out = self.stylegan_decoderdotconstant_input(latent.shape[0])
-    
-        b, c, h, w = 1, 512, 4, 4
+        batch = x.shape[0]
+        b, c, h, w = batch, 512, 4, 4
         # weight modulation
         style = self.stylegan_decoderdotstyle_conv1dotmodulated_convdotmodulation(latent[:, 0]).view(b, 1, c, 1, 1)
         weight = self.stylegan_decoderdotstyle_conv1dotmodulated_convdotweight * style  # (b, c_out, c_in, k, k)
         demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-8)
         weight = weight * demod.view(b, 512, 1, 1, 1)
         weight = weight.view(b * 512, c, 3, 3)
-        b, c, h, w = 1, 512, 4, 4
+        b, c, h, w = batch, 512, 4, 4
         out = out.view(1, b * c, h, w)
         # weight: (b*c_out, c_in, k, k), groups=b
         out = F.conv2d(out, weight, padding=1, groups=b)
         out = out.view(b, 512, *out.shape[2:4]) * 2**0.5 
-        b, _, h, w = 1, 512, 4, 4
+        b, _, h, w = batch, 512, 4, 4
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_conv1dotweight * noise
         out = out + self.stylegan_decoderdotstyle_conv1dotbias
@@ -340,12 +340,14 @@ class GFPGAN(nn.Module):
         x = out    ########
         style = latent[:, 1] ###########
         style = self.stylegan_decoderdotto_rgb1dotmodulated_convdotmodulation(latent[:, 1]).view(b, 1, c, 1, 1)
-        weight = self.stylegan_decoderdotto_rgb1dotmodulated_convdotweight * style     
-        weight = weight.view(3, 512, 1, 1)
-        b, c, h, w = 1, 512, 4, 4
-        x = x.view(1, 512, 4, 4)
-        out = F.conv2d(x, weight, padding=0, groups=b)
-        out = out.view(1, 3, 4, 4)
+        weight = self.stylegan_decoderdotto_rgb1dotmodulated_convdotweight * style
+        weight = weight.view(batch * 3, 512, 1, 1)
+        b, c, h, w = batch, 512, 4, 4
+        x = x.view(batch, 512, 4, 4)
+        # Reshape the weight tensor to have the same shape as the input tensor
+        # Perform two 2D convolutions
+        out = F.conv2d(x.view(1, batch * 512, 4, 4), weight, padding=0, groups=batch)
+        out = out.view(batch, 3, 4, 4)
         out = out + self.stylegan_decoderdotto_rgb1dotbias
         skip = out
         out = out0
@@ -353,7 +355,7 @@ class GFPGAN(nn.Module):
         # i = 1
         i = 1
         x = out
-        b, c, h, w = 1, 512, 4, 4
+        b, c, h, w = batch, 512, 4, 4
         
         #conv1
         style = self.stylegan_decoderdotstyle_convsdot0dotmodulated_convdotmodulation(latent[:, i]).view(b, 1, c, 1, 1)
@@ -368,8 +370,8 @@ class GFPGAN(nn.Module):
         b, c, h, w = x.shape
         x = x.view(1, b * c, h, w)
         out = F.conv2d(x, weight, padding=1, groups=b)
-        out = out.view(1, 512, 8, 8) * 2 ** 0.5 
-        b, _, h, w = 1,_,8,8
+        out = out.view(batch, 512, 8, 8) * 2 ** 0.5 
+        b, _, h, w = batch,_,8,8
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot0dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot0dotbias
@@ -378,14 +380,15 @@ class GFPGAN(nn.Module):
         out_sft = out_sft * conditions[i - 1] + conditions[i]
         out = torch.cat([out_same, out_sft], dim=1)
         #conv2
-        style = self.stylegan_decoderdotstyle_convsdot1dotmodulated_convdotmodulation(latent[:, i + 1]).view(1, 1, 512, 1, 1)
+        style = self.stylegan_decoderdotstyle_convsdot1dotmodulated_convdotmodulation(latent[:, i + 1])
+        style = style.view(batch, 1, 512, 1, 1)
         weight = self.stylegan_decoderdotstyle_convsdot1dotmodulated_convdotweight * style
         # self.demodulate = True:
         demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-08)
         weight = weight * demod.view(b, 512, 1, 1, 1)
         weight = weight.view(b * 512, 512, 3, 3)
-        out = F.conv2d(out, weight, padding=1, groups=b)
-        out = out.view(1, 512, 8, 8) * 2 ** 0.5 
+        out = F.conv2d(out.view(1, batch * 512, 8, 8), weight, padding=1, groups=b)
+        out = out.view(batch, 512, 8, 8) * 2 ** 0.5 
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot1dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot1dotbias
@@ -394,13 +397,13 @@ class GFPGAN(nn.Module):
         #to_rgb
         x = out
         style = latent[:, i + 2]  
-        style = self.stylegan_decoderdotto_rgbsdot0dotmodulated_convdotmodulation(style).view(1, 1, 512, 1, 1)
+        style = self.stylegan_decoderdotto_rgbsdot0dotmodulated_convdotmodulation(style).view(batch, 1, 512, 1, 1)
         weight = self.stylegan_decoderdotto_rgbsdot0dotmodulated_convdotweight * style     
-        weight = weight.view(3, 512, 1, 1)
+        weight = weight.view(batch * 3, 512, 1, 1)
         #b, c, h, w = x.shape
         x = x.view(1, b * c, h, w)
         out = F.conv2d(x, weight, padding=0, groups=b)
-        out = out.view(1, 3, 8, 8)
+        out = out.view(batch, 3, 8, 8)
         out = out + self.stylegan_decoderdotto_rgbsdot0dotbias
         
         skip = F.interpolate(skip, scale_factor=2, mode='bilinear', align_corners=False)
@@ -409,7 +412,7 @@ class GFPGAN(nn.Module):
         # i = 3
         out = out0
         x = out
-        b, c, h, w = 1, 512, 8, 8
+        b, c, h, w = batch, 512, 8, 8
         i += 2
         style = latent[:, i]
         #conv1
@@ -424,8 +427,8 @@ class GFPGAN(nn.Module):
         b, c, h, w = x.shape
         x = x.view(1, b * c, h, w)
         out = F.conv2d(x, weight, padding=1, groups=b)
-        out = out.view(1, 512, 16, 16) * 2 ** 0.5 
-        b, _, h, w = 1, _, 16, 16
+        out = out.view(batch, 512, 16, 16) * 2 ** 0.5 
+        b, _, h, w = batch, _, 16, 16
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot2dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot2dotbias
@@ -434,14 +437,14 @@ class GFPGAN(nn.Module):
         out_sft = out_sft * conditions[i - 1] + conditions[i]
         out = torch.cat([out_same, out_sft], dim=1)
         #conv2
-        style = self.stylegan_decoderdotstyle_convsdot3dotmodulated_convdotmodulation(latent[:, i + 1]).view(1, 1, 512, 1, 1)
+        style = self.stylegan_decoderdotstyle_convsdot3dotmodulated_convdotmodulation(latent[:, i + 1]).view(batch, 1, 512, 1, 1)
         weight = self.stylegan_decoderdotstyle_convsdot3dotmodulated_convdotweight * style
         # self.demodulate = True:
         demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-08)
-        weight = weight * demod.view(1, 512, 1, 1, 1)
+        weight = weight * demod.view(batch, 512, 1, 1, 1)
         weight = weight.view(b * 512, 512, 3, 3)
-        out = F.conv2d(out, weight, padding=1, groups=b)
-        out = out.view(1, 512, 16, 16) * 2 ** 0.5 
+        out = F.conv2d(out.view(1,batch*512,16,16 ), weight, padding=1, groups=b)
+        out = out.view(batch, 512, 16, 16) * 2 ** 0.5 
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot3dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot3dotbias
@@ -450,13 +453,13 @@ class GFPGAN(nn.Module):
         #to_rgb
         x = out
         style = latent[:, i + 2]  
-        style = self.stylegan_decoderdotto_rgbsdot1dotmodulated_convdotmodulation(style).view(1, 1, 512, 1, 1)
+        style = self.stylegan_decoderdotto_rgbsdot1dotmodulated_convdotmodulation(style).view(batch, 1, 512, 1, 1)
         weight = self.stylegan_decoderdotto_rgbsdot1dotmodulated_convdotweight * style     
-        weight = weight.view(3, 512, 1, 1)
+        weight = weight.view(batch * 3, 512, 1, 1)
         #b, c, h, w = x.shape
         x = x.view(1, b * c, h, w)
         out = F.conv2d(x, weight, padding=0, groups=b)
-        out = out.view(1, 3, 16, 16)
+        out = out.view(batch, 3, 16, 16)
         out = out + self.stylegan_decoderdotto_rgbsdot1dotbias
         skip = F.interpolate(skip, scale_factor=2, mode='bilinear', align_corners=False)
         skip = out + skip
@@ -465,7 +468,7 @@ class GFPGAN(nn.Module):
         # i = 5
         out = out0
         x = out
-        b, c, h, w = 1, 512, 32, 32
+        b, c, h, w = batch, 512, 32, 32
         i += 2
         style = latent[:, i] 
         #conv1
@@ -480,8 +483,8 @@ class GFPGAN(nn.Module):
         b, c, h, w = x.shape
         x = x.view(1, b * c, h, w)
         out = F.conv2d(x, weight, padding=1, groups=b)
-        out = out.view(1, 512, 32, 32) * 2 ** 0.5 
-        b, _, h, w = 1, _, 32, 32
+        out = out.view(batch, 512, 32, 32) * 2 ** 0.5 
+        b, _, h, w = batch, _, 32, 32
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot4dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot4dotbias
@@ -492,14 +495,14 @@ class GFPGAN(nn.Module):
         out = torch.cat([out_same, out_sft], dim=1)
        
         #conv2
-        style = self.stylegan_decoderdotstyle_convsdot5dotmodulated_convdotmodulation(latent[:, i + 1]).view(1, 1, 512, 1, 1)
+        style = self.stylegan_decoderdotstyle_convsdot5dotmodulated_convdotmodulation(latent[:, i + 1]).view(batch, 1, 512, 1, 1)
         weight = self.stylegan_decoderdotstyle_convsdot5dotmodulated_convdotweight * style
         # self.demodulate = True:
         demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-08)
-        weight = weight * demod.view(1, 512, 1, 1, 1)
+        weight = weight * demod.view(batch, 512, 1, 1, 1)
         weight = weight.view(b * 512, 512, 3, 3)
-        out = F.conv2d(out, weight, padding=1, groups=b)
-        out = out.view(1, 512, 32, 32) * 2 ** 0.5 
+        out = F.conv2d(out.view(1, batch*512,32,32), weight, padding=1, groups=b)
+        out = out.view(batch, 512, 32, 32) * 2 ** 0.5 
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot5dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot5dotbias
@@ -508,15 +511,15 @@ class GFPGAN(nn.Module):
         #to_rgb
         x = out
         style = latent[:, i + 2]
-        style = self.stylegan_decoderdotto_rgbsdot2dotmodulated_convdotmodulation(style).view(1, 1, 512, 1, 1)
+        style = self.stylegan_decoderdotto_rgbsdot2dotmodulated_convdotmodulation(style).view(batch, 1, 512, 1, 1)
         weight = self.stylegan_decoderdotto_rgbsdot2dotmodulated_convdotweight * style     
         
-        weight = weight.view(3, 512, 1, 1)
+        weight = weight.view(batch * 3,512, 1, 1)
         #b, c, h, w = x.shape
         x = x.view(1, b * c, h, w)
         out = F.conv2d(x, weight, padding=0, groups=b)
         
-        out = out.view(1, 3, 32, 32)
+        out = out.view(batch, 3, 32, 32)
         out = out + self.stylegan_decoderdotto_rgbsdot2dotbias
         skip = F.interpolate(skip, scale_factor=2, mode='bilinear', align_corners=False)
         skip = out + skip
@@ -524,7 +527,7 @@ class GFPGAN(nn.Module):
         # i = 7
         out = out0
         x = out
-        b, c, h, w = 1, 512, 32, 32
+        b, c, h, w = batch, 512, 32, 32
         i += 2
         style = latent[:, i]   # 数值一致
         #conv1
@@ -539,8 +542,8 @@ class GFPGAN(nn.Module):
         b, c, h, w = x.shape
         x = x.view(1, b * c, h, w)
         out = F.conv2d(x, weight, padding=1, groups=b)
-        out = out.view(1, 512, 64, 64) * 2 ** 0.5 
-        b, _, h, w = 1, _, 64, 64
+        out = out.view(batch, 512, 64, 64) * 2 ** 0.5 
+        b, _, h, w = batch, _, 64, 64
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot7dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot7dotbias
@@ -549,14 +552,14 @@ class GFPGAN(nn.Module):
         out_sft = out_sft * conditions[i - 1] + conditions[i]
         out = torch.cat([out_same, out_sft], dim=1)
         #conv2
-        style = self.stylegan_decoderdotstyle_convsdot7dotmodulated_convdotmodulation(latent[:, i + 1]).view(1, 1, 512, 1, 1)
+        style = self.stylegan_decoderdotstyle_convsdot7dotmodulated_convdotmodulation(latent[:, i + 1]).view(batch, 1, 512, 1, 1)
         weight = self.stylegan_decoderdotstyle_convsdot7dotmodulated_convdotweight * style
         # self.demodulate = True:
         demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-08)
-        weight = weight * demod.view(1, 512, 1, 1, 1)
+        weight = weight * demod.view(batch, 512, 1, 1, 1)
         weight = weight.view(b * 512, 512, 3, 3)
-        out = F.conv2d(out, weight, padding=1, groups=b)
-        out = out.view(1, 512, 64, 64) * 2 ** 0.5 
+        out = F.conv2d(out.view(1, batch * 512, 64, 64), weight, padding=1, groups=b)
+        out = out.view(batch, 512, 64, 64) * 2 ** 0.5 
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot7dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot7dotbias
@@ -565,13 +568,13 @@ class GFPGAN(nn.Module):
         #to_rgb
         x = out
         style = latent[:, i + 2]
-        style = self.stylegan_decoderdotto_rgbsdot3dotmodulated_convdotmodulation(style).view(1, 1, 512, 1, 1)
+        style = self.stylegan_decoderdotto_rgbsdot3dotmodulated_convdotmodulation(style).view(batch, 1, 512, 1, 1)
         weight = self.stylegan_decoderdotto_rgbsdot3dotmodulated_convdotweight * style     
-        weight = weight.view(3, 512, 1, 1)
+        weight = weight.view(batch * 3, 512, 1, 1)
         #b, c, h, w = x.shape
         x = x.view(1, b * c, h, w)
         out = F.conv2d(x, weight, padding=0, groups=b)
-        out = out.view(1, 3, 64, 64)
+        out = out.view(batch, 3, 64, 64)
         out = out + self.stylegan_decoderdotto_rgbsdot3dotbias
         skip = F.interpolate(skip, scale_factor=2, mode='bilinear', align_corners=False)
         skip = out + skip
@@ -579,7 +582,7 @@ class GFPGAN(nn.Module):
         # i = 9
         out = out0
         x = out
-        b, c, h, w = 1, 512, 64, 64
+        b, c, h, w = batch, 512, 64, 64
         i += 2
         style = latent[:, i]   # 数值一致
         #conv1
@@ -594,8 +597,8 @@ class GFPGAN(nn.Module):
         b, c, h, w = x.shape
         x = x.view(1, b * c, h, w)
         out = F.conv2d(x, weight, padding=1, groups=b)
-        out = out.view(1, 256, 128, 128) * 2 ** 0.5 
-        b, _, h, w = 1, _, 128, 128
+        out = out.view(batch, 256, 128, 128) * 2 ** 0.5 
+        b, _, h, w = batch, _, 128, 128
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot8dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot8dotbias
@@ -604,14 +607,14 @@ class GFPGAN(nn.Module):
         out_sft = out_sft * conditions[i - 1] + conditions[i]
         out = torch.cat([out_same, out_sft], dim=1)
         #conv2
-        style = self.stylegan_decoderdotstyle_convsdot9dotmodulated_convdotmodulation(latent[:, i + 1]).view(1, 1, 256, 1, 1)
+        style = self.stylegan_decoderdotstyle_convsdot9dotmodulated_convdotmodulation(latent[:, i + 1]).view(batch, 1, 256, 1, 1)
         weight = self.stylegan_decoderdotstyle_convsdot9dotmodulated_convdotweight * style
         # self.demodulate = True:
         demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-08)
-        weight = weight * demod.view(1, 256, 1, 1, 1)
+        weight = weight * demod.view(batch, 256, 1, 1, 1)
         weight = weight.view(b * 256, 256, 3, 3)
-        out = F.conv2d(out, weight, padding=1, groups=b)
-        out = out.view(1, 256, 128, 128) * 2 ** 0.5 
+        out = F.conv2d(out.view(1, batch*256,128,128), weight, padding=1, groups=b)
+        out = out.view(batch, 256, 128, 128) * 2 ** 0.5 
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot9dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot9dotbias
@@ -620,13 +623,13 @@ class GFPGAN(nn.Module):
         #to_rgb
         x = out
         style = latent[:, i + 2]
-        style = self.stylegan_decoderdotto_rgbsdot4dotmodulated_convdotmodulation(style).view(1, 1, 256, 1, 1)
+        style = self.stylegan_decoderdotto_rgbsdot4dotmodulated_convdotmodulation(style).view(batch, 1, 256, 1, 1)
         weight = self.stylegan_decoderdotto_rgbsdot4dotmodulated_convdotweight * style     
-        weight = weight.view(3, 256, 1, 1)
+        weight = weight.view(batch*3, 256, 1, 1)
         b, c, h, w = x.shape
         x = x.view(1, b * c, h, w)
         out = F.conv2d(x, weight, padding=0, groups=b)
-        out = out.view(1, 3, 128, 128)
+        out = out.view(batch, 3, 128, 128)
         out = out + self.stylegan_decoderdotto_rgbsdot4dotbias
         skip = F.interpolate(skip, scale_factor=2, mode='bilinear', align_corners=False)
         skip = out + skip
@@ -634,7 +637,7 @@ class GFPGAN(nn.Module):
         # i = 11
         out = out0
         x = out
-        b, c, h, w = 1, 256, 128, 128
+        b, c, h, w = batch, 256, 128, 128
         i += 2
         style = latent[:, i]   # 数值一致 
         style = self.stylegan_decoderdotstyle_convsdot10dotmodulated_convdotmodulation(latent[:, i]).view(b, 1, c, 1, 1)     
@@ -647,9 +650,9 @@ class GFPGAN(nn.Module):
         # self.sample_mode == 'upsample'
         x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
         b, c, h, w = x.shape
-        out = F.conv2d(x, weight, padding=1, groups=b)
-        out = out.view(1, 128, 256, 256) * 2 ** 0.5 
-        b, _, h, w = 1, _, 256, 256
+        out = F.conv2d(x.view(1, batch*256, 256, 256), weight, padding=1, groups=b)
+        out = out.view(batch, 128, 256, 256) * 2 ** 0.5 
+        b, _, h, w = batch, _, 256, 256
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot10dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot10dotbias
@@ -658,14 +661,14 @@ class GFPGAN(nn.Module):
         out_sft = out_sft * conditions[i - 1] + conditions[i]
         out = torch.cat([out_same, out_sft], dim=1)
         #conv2
-        style = self.stylegan_decoderdotstyle_convsdot11dotmodulated_convdotmodulation(latent[:, i + 1]).view(1, 1, 128, 1, 1)
+        style = self.stylegan_decoderdotstyle_convsdot11dotmodulated_convdotmodulation(latent[:, i + 1]).view(batch, 1, 128, 1, 1)
         weight = self.stylegan_decoderdotstyle_convsdot11dotmodulated_convdotweight * style 
         # self.demodulate = True:
         demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-08)
-        weight = weight * demod.view(1, 128, 1, 1, 1)
+        weight = weight * demod.view(batch, 128, 1, 1, 1)
         weight = weight.view(b * 128, 128, 3, 3)
-        out = F.conv2d(out, weight, padding=1, groups=b)
-        out = out.view(1, 128, 256, 256) * 2 ** 0.5 
+        out = F.conv2d(out.view(1, batch*128,256,256), weight, padding=1, groups=b)
+        out = out.view(batch, 128, 256, 256) * 2 ** 0.5 
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot11dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot11dotbias
@@ -674,13 +677,13 @@ class GFPGAN(nn.Module):
         #to_rgb
         x = out
         style = latent[:, i + 2]
-        style = self.stylegan_decoderdotto_rgbsdot5dotmodulated_convdotmodulation(style).view(1, 1, 128, 1, 1)
+        style = self.stylegan_decoderdotto_rgbsdot5dotmodulated_convdotmodulation(style).view(batch, 1, 128, 1, 1)
         weight = self.stylegan_decoderdotto_rgbsdot5dotmodulated_convdotweight * style     
-        weight = weight.view(3, 128, 1, 1)
+        weight = weight.view(batch*3, 128, 1, 1)
         b, c, h, w = x.shape
         x = x.view(1, b * c, h, w)
         out = F.conv2d(x, weight, padding=0, groups=b)
-        out = out.view(1, 3, 256, 256) 
+        out = out.view(batch, 3, 256, 256) 
         out = out + self.stylegan_decoderdotto_rgbsdot5dotbias
         skip = F.interpolate(skip, scale_factor=2, mode='bilinear', align_corners=False)
         skip = out + skip
@@ -688,7 +691,7 @@ class GFPGAN(nn.Module):
         # i = 13
         out = out0
         x = out
-        b, c, h, w = 1, 128, 256, 256
+        b, c, h, w = batch, 128, 256, 256
         i += 2
         style = latent[:, i]   # 数值一致 
         style = self.stylegan_decoderdotstyle_convsdot12dotmodulated_convdotmodulation(latent[:, i]).view(b, 1, c, 1, 1)     
@@ -703,9 +706,9 @@ class GFPGAN(nn.Module):
         # self.sample_mode == 'upsample'
         x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
         b, c, h, w = x.shape
-        out = F.conv2d(x, weight, padding=1, groups=b)
-        out = out.view(1, 64, 512, 512) * 2 ** 0.5 
-        b, _, h, w = 1, _, 512, 512
+        out = F.conv2d(x.view(1, batch*128, 512,512), weight, padding=1, groups=b)
+        out = out.view(batch, 64, 512, 512) * 2 ** 0.5 
+        b, _, h, w = batch, _, 512, 512
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot12dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot12dotbias
@@ -715,15 +718,15 @@ class GFPGAN(nn.Module):
         out_sft = out_sft * conditions[i - 1] + conditions[i]
         out = torch.cat([out_same, out_sft], dim=1)
         #conv2
-        style = self.stylegan_decoderdotstyle_convsdot13dotmodulated_convdotmodulation(latent[:, i + 1]).view(1, 1, 64, 1, 1)
+        style = self.stylegan_decoderdotstyle_convsdot13dotmodulated_convdotmodulation(latent[:, i + 1]).view(batch, 1, 64, 1, 1)
         weight = self.stylegan_decoderdotstyle_convsdot13dotmodulated_convdotweight * style 
         
         # self.demodulate = True:
         demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-08)
-        weight = weight * demod.view(1, 64, 1, 1, 1)
+        weight = weight * demod.view(batch, 64, 1, 1, 1)
         weight = weight.view(b * 64, 64, 3, 3)
-        out = F.conv2d(out, weight, padding=1, groups=b)
-        out = out.view(1, 64, 512, 512) * 2 ** 0.5 
+        out = F.conv2d(out.view(1, batch*64, 512, 512), weight, padding=1, groups=b)
+        out = out.view(batch, 64, 512, 512) * 2 ** 0.5 
         noise = noise_dict[w]
         out = out + self.stylegan_decoderdotstyle_convsdot13dotweight * noise
         out = out + self.stylegan_decoderdotstyle_convsdot13dotbias
@@ -732,13 +735,13 @@ class GFPGAN(nn.Module):
         #to_rgb
         x = out
         style = latent[:, i + 2]
-        style = self.stylegan_decoderdotto_rgbsdot6dotmodulated_convdotmodulation(style).view(1, 1, 64, 1, 1) 
+        style = self.stylegan_decoderdotto_rgbsdot6dotmodulated_convdotmodulation(style).view(batch, 1, 64, 1, 1) 
         weight = self.stylegan_decoderdotto_rgbsdot6dotmodulated_convdotweight * style     
-        weight = weight.view(3, 64, 1, 1)
+        weight = weight.view(batch*3, 64, 1, 1)
         b, c, h, w = x.shape
         x = x.view(1, b * c, h, w)
         out = F.conv2d(x, weight, padding=0, groups=b)    
-        out = out.view(1, 3, 512, 512) 
+        out = out.view(batch, 3, 512, 512) 
         out = out + self.stylegan_decoderdotto_rgbsdot6dotbias
         skip = F.interpolate(skip, scale_factor=2, mode='bilinear', align_corners=False)
         skip = out + skip
