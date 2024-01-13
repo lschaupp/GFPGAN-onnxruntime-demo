@@ -29,7 +29,7 @@ model_path = args.src_model_path
 onnx_model_path = args.dst_model_path
 img_size = args.img_size
 
-model = GFPGAN(batch=32)#.cuda()
+model = GFPGAN()#.cuda()
 
 x = torch.rand(2, 3, 512, 512)#.cuda()
 
